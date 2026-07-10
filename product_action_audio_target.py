@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -329,11 +330,35 @@ class Handler(BaseHTTPRequestHandler):
             _send(self, 400, {"ok": False, "error": str(error), "target_identity": IDENTITY})
 
 
+def _run_stdio() -> int:
+    raw = sys.stdin.read()
+    try:
+        payload = json.loads(raw) if raw.strip() else {}
+        if not isinstance(payload, dict):
+            raise ValueError("stdin payload must be a JSON object")
+        print(json.dumps(_render(payload), ensure_ascii=False), flush=True)
+        return 0
+    except Exception as error:
+        print(
+            json.dumps({"ok": False, "error": str(error), "target_identity": IDENTITY}, ensure_ascii=False),
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8193)
+    parser.add_argument(
+        "--stdio",
+        action="store_true",
+        help="Read one render request JSON object from stdin and write one response JSON object to stdout.",
+    )
     args = parser.parse_args()
+    if args.stdio:
+        return _run_stdio()
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(json.dumps({"status": "ready", "url": f"http://{args.host}:{args.port}"}, ensure_ascii=False), flush=True)
     try:

@@ -18,6 +18,15 @@ python product_action_audio_target.py --host 127.0.0.1 --port 8193
 python product_action_audio_helper.py --host 127.0.0.1 --port 8192
 ```
 
+The target can also run as a command target. In this mode the helper sends one
+render request JSON object through stdin and expects one response JSON object on
+stdout. The helper performs a real render probe before reporting ready:
+
+```powershell
+$env:GUANXIANG_ACTION_AUDIO_TARGET_COMMAND = "python F:\guanxiang-action-audio-helper\product_action_audio_target.py --stdio"
+python product_action_audio_helper.py --host 127.0.0.1 --port 8192
+```
+
 Then point the product service at:
 
 ```powershell

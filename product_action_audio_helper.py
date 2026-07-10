@@ -86,6 +86,96 @@ def _run_command(payload: dict[str, Any]) -> dict[str, Any]:
     return loaded
 
 
+def _command_probe_payload() -> dict[str, Any]:
+    duration_ms = 100
+    track_values = {
+        "f0": 132.0,
+        "pressure": 9200.0,
+        "x_bottom": 0.03,
+        "x_top": 0.02,
+        "chink_area": 0.02,
+        "lag": 1.12,
+        "rel_amp": 1.0,
+        "pulse_shape": 0.2,
+        "flutter": 18.0,
+    }
+    return {
+        "schema_version": PRODUCT_ACTION_AUDIO_HELPER_REQUEST_SCHEMA,
+        "renderer_contract": "action_to_audio",
+        "commercial_boundary": PRODUCT_ACTION_AUDIO_HELPER_BOUNDARY,
+        "product_evidence_required": True,
+        "fallback_allowed": False,
+        "sample_rate_hz": PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_SAMPLE_RATE_HZ,
+        "duration_ms": duration_ms,
+        "render_context": {
+            "project_id": "product_action_audio_helper_command_probe",
+            "source_route": "product_action_audio_helper",
+        },
+        "actions": {
+            "schema_version": PRODUCT_ACTION_AUDIO_HELPER_ACTIONS_SCHEMA,
+            "source": "product_action_audio_helper_command_probe",
+            "duration_ms": duration_ms,
+            "coverage_end_ms": duration_ms,
+            "tracks": list(PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS),
+            "gestures": [
+                {
+                    "track": track,
+                    "start_ms": 0,
+                    "duration_ms": duration_ms,
+                    "value": track_values[track],
+                    "motion_source": "runtime_health_probe",
+                    "truth_tier": "product_runtime_contract",
+                    "confidence": 1.0,
+                }
+                for track in PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS
+            ],
+            "frames": [],
+        },
+        "output_file": "",
+    }
+
+
+def _probe_command_target() -> dict[str, Any]:
+    try:
+        response = _run_command(_command_probe_payload())
+        contract_error = response_contract_error(response)
+        if contract_error:
+            return {
+                "ready": False,
+                "target_probe_ok": False,
+                "target_probe_error": contract_error,
+                "target_identity": {},
+                "target_probe_metrics": {},
+            }
+        audio = response.get("audio")
+        if not isinstance(audio, list) or len(audio) == 0:
+            target_identity = response.get("target_identity")
+            return {
+                "ready": False,
+                "target_probe_ok": False,
+                "target_probe_error": "target command probe returned no audio",
+                "target_identity": target_identity if isinstance(target_identity, dict) else {},
+                "target_probe_metrics": {},
+            }
+        target_identity = response.get("target_identity")
+        metrics = response.get("metrics")
+        return {
+            "ready": True,
+            "target_probe_ok": True,
+            "target_probe_error": "",
+            "target_identity": target_identity if isinstance(target_identity, dict) else {},
+            "target_probe_metrics": metrics if isinstance(metrics, dict) else {},
+        }
+    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+        return {
+            "ready": False,
+            "target_probe_ok": False,
+            "target_probe_error": str(error),
+            "target_identity": {},
+            "target_probe_metrics": {},
+        }
+
+
 def _probe() -> dict[str, Any]:
     target_url = _target_url()
     if target_url == "" and _target_command() == "":
@@ -104,22 +194,7 @@ def _probe() -> dict[str, Any]:
             }
         except (OSError, URLError, ValueError, json.JSONDecodeError) as error:
             return {"ready": False, "target_probe_ok": False, "target_probe_error": str(error), "target_identity": {}, "target_probe_metrics": {}}
-    return {
-        "ready": True,
-        "target_probe_ok": True,
-        "target_probe_error": "",
-        "target_identity": {
-            "protocol": PRODUCT_ACTION_AUDIO_TARGET_PROTOCOL,
-            "runtime_kind": PRODUCT_ACTION_AUDIO_TARGET_REQUIRED_RUNTIME_KIND,
-            "claim_tier": PRODUCT_ACTION_AUDIO_TARGET_REQUIRED_CLAIM_TIER,
-            "engine_family": "command_configured_product_action_audio_target",
-            "engine_capabilities": ["nine_track_dynamic_glottis"],
-            "product_evidence_allowed": True,
-            "not_for_product_evidence": False,
-            "fallback_allowed": False,
-        },
-        "target_probe_metrics": {},
-    }
+    return _probe_command_target()
 
 
 def _health() -> dict[str, Any]:
