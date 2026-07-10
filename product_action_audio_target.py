@@ -180,21 +180,28 @@ def _render(payload: dict[str, Any]) -> dict[str, Any]:
     n = max(1, round(sample_rate_hz * duration_ms / 1000))
     f0 = np.clip(track["f0"], 40.0, 600.0)
     pressure = np.clip(track["pressure"], 0.0, 16000.0)
+    x_bottom = np.clip(track["x_bottom"], -0.12, 0.18)
+    x_top = np.clip(track["x_top"], -0.12, 0.18)
     chink = np.clip(track["chink_area"], -0.25, 0.25)
     lag = np.clip(track["lag"], 0.0, math.pi)
     rel_amp = np.clip(track["rel_amp"], -1.0, 1.0)
     pulse_shape = np.clip(track["pulse_shape"], -1.0, 1.0)
     flutter = np.clip(track["flutter"], 0.0, 100.0)
+    fold_gap = np.clip((x_bottom + x_top) * 0.5, -0.12, 0.18)
+    vertical_phase_skew = np.clip(x_top - x_bottom, -0.18, 0.18)
     phase = np.cumsum((2.0 * math.pi * f0) / sample_rate_hz).astype(np.float32)
-    cycle = (phase / (2.0 * math.pi)) % 1.0
-    oq = np.clip(0.52 + 0.05 * pulse_shape, 0.35, 0.82)
+    skewed_phase = phase + lag * vertical_phase_skew * 2.2
+    cycle = (skewed_phase / (2.0 * math.pi)) % 1.0
+    oq = np.clip(0.52 + 0.05 * pulse_shape + 0.42 * fold_gap, 0.28, 0.86)
     open_phase = np.clip(cycle / oq, 0.0, 1.0)
     closed_phase = np.clip((cycle - oq) / np.maximum(1.0e-4, 1.0 - oq), 0.0, 1.0)
     flow = np.where(cycle <= oq, 0.5 - 0.5 * np.cos(np.pi * open_phase), np.exp(-6.0 * closed_phase))
     source = np.diff(flow, prepend=flow[0]).astype(np.float32)
-    source *= (0.25 + pressure / 16000.0) * (0.45 + np.abs(rel_amp)) * (1.0 + 0.18 * np.sin(lag))
+    closure_efficiency = np.clip(1.0 - np.abs(fold_gap) * 4.8 - np.abs(chink) * 2.2, 0.12, 1.2)
+    open_leak = np.clip(np.abs(chink) * 7.5 + np.maximum(fold_gap, 0.0) * 5.5, 0.0, 1.0)
+    source *= (0.25 + pressure / 16000.0) * (0.45 + np.abs(rel_amp)) * closure_efficiency * (1.0 + 0.18 * np.sin(lag))
     source += (np.sin(phase * 0.37 + 1.7) + np.sin(phase * 1.91)) * 0.015 * np.clip(
-        np.abs(chink) * 8.0 + flutter / 100.0,
+        open_leak + flutter / 100.0,
         0.0,
         1.0,
     )
@@ -289,7 +296,13 @@ def _render(payload: dict[str, Any]) -> dict[str, Any]:
             "action_f0_mean_hz": summary["f0_mean"],
             "action_f0_range_hz": summary["f0_range"],
             "action_pressure_mean_pa": summary["pressure_mean"],
+            "action_x_bottom_mean": summary["x_bottom_mean"],
+            "action_x_top_mean": summary["x_top_mean"],
             "action_chink_area_mean": summary["chink_area_mean"],
+            "fold_gap_mean": float(np.mean(fold_gap)),
+            "vertical_phase_skew_mean": float(np.mean(vertical_phase_skew)),
+            "closure_efficiency_mean": float(np.mean(closure_efficiency)),
+            "open_leak_mean": float(np.mean(open_leak)),
             "f1_hz": float(f1),
             "f2_hz": float(f2),
             "f3_hz": float(f3),

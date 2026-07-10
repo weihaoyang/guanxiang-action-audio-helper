@@ -6,6 +6,7 @@ import os
 import subprocess
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Lock
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -24,6 +25,10 @@ from action_audio_contract import (
     product_action_audio_target_identity_error,
     response_contract_error,
 )
+
+_PROBE_CACHE_LOCK = Lock()
+_PROBE_CACHE: dict[str, Any] = {"expires_at": 0.0, "key": "", "payload": None}
+_PROBE_CACHE_TTL_S = 2.0
 
 
 def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
@@ -176,25 +181,71 @@ def _probe_command_target() -> dict[str, Any]:
         }
 
 
-def _probe() -> dict[str, Any]:
-    target_url = _target_url()
-    if target_url == "" and _target_command() == "":
-        return {"ready": False, "target_probe_ok": False, "target_probe_error": "GUANXIANG_ACTION_AUDIO_TARGET_URL or GUANXIANG_ACTION_AUDIO_TARGET_COMMAND is required", "target_identity": {}, "target_probe_metrics": {}}
-    if target_url:
-        try:
-            status, payload = _fetch(f"{target_url}/ready")
-            identity = payload.get("target_identity") if isinstance(payload.get("target_identity"), dict) else {}
-            identity_error = product_action_audio_target_identity_error({"target_identity": identity})
+def _probe_url_target(target_url: str) -> dict[str, Any]:
+    try:
+        status, payload = _fetch(f"{target_url}/ready")
+        identity = payload.get("target_identity") if isinstance(payload.get("target_identity"), dict) else {}
+        identity_error = product_action_audio_target_identity_error({"target_identity": identity})
+        if status != 200 or payload.get("ready") is not True or identity_error:
             return {
-                "ready": status == 200 and payload.get("ready") is True and identity_error == "",
-                "target_probe_ok": payload.get("target_probe_ok") is True and identity_error == "",
-                "target_probe_error": identity_error or str(payload.get("target_probe_error", "") or ""),
+                "ready": False,
+                "target_probe_ok": False,
+                "target_probe_error": identity_error or str(payload.get("target_probe_error", "") or "target not ready"),
                 "target_identity": identity,
                 "target_probe_metrics": payload.get("target_probe_metrics") if isinstance(payload.get("target_probe_metrics"), dict) else {},
             }
-        except (OSError, URLError, ValueError, json.JSONDecodeError) as error:
-            return {"ready": False, "target_probe_ok": False, "target_probe_error": str(error), "target_identity": {}, "target_probe_metrics": {}}
-    return _probe_command_target()
+        render_response = _post(f"{target_url}/render", _command_probe_payload(), timeout_s=5.0)
+        contract_error = response_contract_error(render_response)
+        if contract_error:
+            return {
+                "ready": False,
+                "target_probe_ok": False,
+                "target_probe_error": contract_error,
+                "target_identity": identity,
+                "target_probe_metrics": {},
+            }
+        audio = render_response.get("audio")
+        if not isinstance(audio, list) or len(audio) == 0:
+            return {
+                "ready": False,
+                "target_probe_ok": False,
+                "target_probe_error": "target render probe returned no audio",
+                "target_identity": identity,
+                "target_probe_metrics": {},
+            }
+        metrics = render_response.get("metrics")
+        return {
+            "ready": True,
+            "target_probe_ok": True,
+            "target_probe_error": "",
+            "target_identity": render_response.get("target_identity") if isinstance(render_response.get("target_identity"), dict) else identity,
+            "target_probe_metrics": metrics if isinstance(metrics, dict) else {},
+        }
+    except (OSError, URLError, ValueError, json.JSONDecodeError) as error:
+        return {"ready": False, "target_probe_ok": False, "target_probe_error": str(error), "target_identity": {}, "target_probe_metrics": {}}
+
+
+def _probe() -> dict[str, Any]:
+    target_url = _target_url()
+    target_command = _target_command()
+    probe_key = f"url:{target_url}" if target_url else f"command:{target_command}"
+    now = time.monotonic()
+    with _PROBE_CACHE_LOCK:
+        if (
+            _PROBE_CACHE.get("key") == probe_key
+            and float(_PROBE_CACHE.get("expires_at", 0.0) or 0.0) > now
+            and isinstance(_PROBE_CACHE.get("payload"), dict)
+        ):
+            return dict(_PROBE_CACHE["payload"])
+    if target_url == "" and target_command == "":
+        return {"ready": False, "target_probe_ok": False, "target_probe_error": "GUANXIANG_ACTION_AUDIO_TARGET_URL or GUANXIANG_ACTION_AUDIO_TARGET_COMMAND is required", "target_identity": {}, "target_probe_metrics": {}}
+    if target_url:
+        result = _probe_url_target(target_url)
+    else:
+        result = _probe_command_target()
+    with _PROBE_CACHE_LOCK:
+        _PROBE_CACHE.update({"key": probe_key, "expires_at": time.monotonic() + _PROBE_CACHE_TTL_S, "payload": dict(result)})
+    return result
 
 
 def _health() -> dict[str, Any]:

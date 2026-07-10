@@ -8,6 +8,7 @@ from action_audio_contract import (
     product_action_audio_target_identity_error,
     response_contract_error,
 )
+import product_action_audio_helper
 from product_action_audio_helper import _command_probe_payload
 from product_action_audio_target import _render
 
@@ -59,3 +60,42 @@ def test_target_identity_requires_nine_track_dynamic_glottis_capability() -> Non
         product_action_audio_target_identity_error({"target_identity": target_identity})
         == "product action-audio target identity must include nine_track_dynamic_glottis"
     )
+
+
+def test_glottal_position_tracks_change_audio() -> None:
+    baseline = _command_probe_payload()
+    variant = _command_probe_payload()
+    for gesture in variant["actions"]["gestures"]:
+        if gesture["track"] == "x_bottom":
+            gesture["value"] = 0.12
+        if gesture["track"] == "x_top":
+            gesture["value"] = -0.08
+
+    baseline_audio = _render(baseline)["audio"]
+    variant_audio = _render(variant)["audio"]
+
+    mean_abs_delta = sum(abs(float(left) - float(right)) for left, right in zip(baseline_audio, variant_audio)) / len(baseline_audio)
+    assert mean_abs_delta > 1.0e-4
+
+
+def test_url_target_probe_requires_real_contract_render(monkeypatch) -> None:
+    render_calls: list[dict] = []
+
+    def fake_fetch(url: str, timeout_s: float = 1.5) -> tuple[int, dict]:
+        assert url == "http://target.example/ready"
+        return 200, {"ready": True, "target_identity": _render(_command_probe_payload())["target_identity"], "target_probe_ok": True}
+
+    def fake_post(url: str, payload: dict, timeout_s: float = 20.0) -> dict:
+        assert url == "http://target.example/render"
+        render_calls.append(payload)
+        return _render(payload)
+
+    monkeypatch.setattr(product_action_audio_helper, "_fetch", fake_fetch)
+    monkeypatch.setattr(product_action_audio_helper, "_post", fake_post)
+
+    response = product_action_audio_helper._probe_url_target("http://target.example")
+
+    assert response["ready"] is True
+    assert response["target_probe_ok"] is True
+    assert response["target_probe_error"] == ""
+    assert len(render_calls) == 1
