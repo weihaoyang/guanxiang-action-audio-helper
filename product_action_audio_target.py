@@ -319,6 +319,107 @@ def _render(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _track_variant_payload(track_name: str, track_value: float, *, duration_ms: int = 180) -> dict[str, Any]:
+    neutral = {
+        "f0": 132.0,
+        "pressure": 9200.0,
+        "x_bottom": 0.03,
+        "x_top": 0.02,
+        "chink_area": 0.02,
+        "lag": 1.12,
+        "rel_amp": 1.0,
+        "pulse_shape": 0.2,
+        "flutter": 18.0,
+    }
+    neutral[track_name] = track_value
+    return {
+        "schema_version": PRODUCT_ACTION_AUDIO_HELPER_REQUEST_SCHEMA,
+        "renderer_contract": "action_to_audio",
+        "commercial_boundary": PRODUCT_ACTION_AUDIO_HELPER_BOUNDARY,
+        "product_evidence_required": True,
+        "fallback_allowed": False,
+        "sample_rate_hz": PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_SAMPLE_RATE_HZ,
+        "duration_ms": duration_ms,
+        "render_context": {
+            "project_id": "product_action_audio_target_self_test",
+            "source_route": "product_action_audio_target",
+        },
+        "actions": {
+            "schema_version": PRODUCT_ACTION_AUDIO_HELPER_ACTIONS_SCHEMA,
+            "source": "product_action_audio_target_self_test",
+            "duration_ms": duration_ms,
+            "coverage_end_ms": duration_ms,
+            "tracks": list(PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS),
+            "gestures": [
+                {
+                    "track": track,
+                    "start_ms": 0,
+                    "duration_ms": duration_ms,
+                    "value": neutral[track],
+                    "motion_source": "target_self_test",
+                    "truth_tier": "product_runtime_contract",
+                    "confidence": 1.0,
+                }
+                for track in PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS
+            ],
+            "frames": [],
+        },
+        "output_file": "",
+    }
+
+
+def _mean_abs_delta(left: list[float], right: list[float]) -> float:
+    if len(left) != len(right) or len(left) == 0:
+        return 0.0
+    return float(sum(abs(float(a) - float(b)) for a, b in zip(left, right)) / len(left))
+
+
+def _self_test() -> dict[str, Any]:
+    started = time.perf_counter()
+    baseline = _render(_track_variant_payload("f0", 132.0))
+    variants = {
+        "f0": 224.0,
+        "pressure": 13800.0,
+        "x_bottom": 0.12,
+        "x_top": -0.08,
+        "chink_area": 0.12,
+        "lag": 2.15,
+        "rel_amp": 0.28,
+        "pulse_shape": -0.65,
+        "flutter": 68.0,
+    }
+    baseline_audio = baseline["audio"]
+    coupling: dict[str, dict[str, float | bool]] = {}
+    failed: list[str] = []
+    for track, value in variants.items():
+        variant = _render(_track_variant_payload(track, value))
+        delta = _mean_abs_delta(baseline_audio, variant["audio"])
+        metric_delta = abs(
+            float(variant["action_summary"].get(f"{track}_mean", 0.0))
+            - float(baseline["action_summary"].get(f"{track}_mean", 0.0))
+        )
+        coupled = delta > 1.0e-5 and metric_delta > 1.0e-6
+        coupling[track] = {
+            "coupled": coupled,
+            "audio_mean_abs_delta": delta,
+            "action_mean_delta": metric_delta,
+        }
+        if not coupled:
+            failed.append(track)
+    ok = len(failed) == 0 and baseline["audio_quality"]["non_silent"] is True
+    return {
+        "ok": ok,
+        "ready": ok,
+        "gate_status": "ready" if ok else "self_test_failed",
+        "target_identity": IDENTITY,
+        "target_probe_ok": ok,
+        "target_probe_error": "" if ok else f"uncoupled tracks: {', '.join(failed)}",
+        "target_probe_metrics": baseline["metrics"],
+        "track_coupling": coupling,
+        "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+    }
+
+
 def _health() -> dict[str, Any]:
     return {"ok": True, "ready": True, "gate_status": "ready", "target_identity": IDENTITY, "target_probe_ok": True, "target_probe_error": "", "target_probe_metrics": {}}
 
@@ -330,6 +431,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path.rstrip("/") in {"", "/health", "/ready"}:
             _send(self, 200, _health())
+            return
+        if self.path.rstrip("/") == "/self-test":
+            payload = _self_test()
+            _send(self, 200 if payload["ok"] else 503, payload)
             return
         _send(self, 404, {"ok": False, "error": "not_found"})
 

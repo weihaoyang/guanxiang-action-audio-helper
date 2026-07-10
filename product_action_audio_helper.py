@@ -225,6 +225,120 @@ def _probe_url_target(target_url: str) -> dict[str, Any]:
         return {"ready": False, "target_probe_ok": False, "target_probe_error": str(error), "target_identity": {}, "target_probe_metrics": {}}
 
 
+def _target_self_test_from_renders() -> dict[str, Any]:
+    baseline = _run_command(_command_probe_payload())
+    audio = baseline.get("audio")
+    if not isinstance(audio, list) or len(audio) == 0:
+        raise ValueError("target self-test baseline returned no audio")
+    failed: list[str] = []
+    coupling: dict[str, dict[str, float | bool]] = {}
+    variants = {
+        "f0": 224.0,
+        "pressure": 13800.0,
+        "x_bottom": 0.12,
+        "x_top": -0.08,
+        "chink_area": 0.12,
+        "lag": 2.15,
+        "rel_amp": 0.28,
+        "pulse_shape": -0.65,
+        "flutter": 68.0,
+    }
+    baseline_summary = baseline.get("action_summary") if isinstance(baseline.get("action_summary"), dict) else {}
+    for track, value in variants.items():
+        payload = _command_probe_payload()
+        for gesture in payload["actions"]["gestures"]:
+            if gesture["track"] == track:
+                gesture["value"] = value
+        variant = _run_command(payload)
+        variant_audio = variant.get("audio")
+        if not isinstance(variant_audio, list) or len(variant_audio) != len(audio):
+            raise ValueError(f"target self-test variant returned invalid audio for {track}")
+        delta = sum(abs(float(left) - float(right)) for left, right in zip(audio, variant_audio)) / len(audio)
+        variant_summary = variant.get("action_summary") if isinstance(variant.get("action_summary"), dict) else {}
+        metric_delta = abs(float(variant_summary.get(f"{track}_mean", 0.0)) - float(baseline_summary.get(f"{track}_mean", 0.0)))
+        coupled = delta > 1.0e-5 and metric_delta > 1.0e-6
+        coupling[track] = {
+            "coupled": coupled,
+            "audio_mean_abs_delta": delta,
+            "action_mean_delta": metric_delta,
+        }
+        if not coupled:
+            failed.append(track)
+    ok = len(failed) == 0
+    return {
+        "ok": ok,
+        "ready": ok,
+        "gate_status": "ready" if ok else "self_test_failed",
+        "target_identity": baseline.get("target_identity") if isinstance(baseline.get("target_identity"), dict) else {},
+        "target_probe_ok": ok,
+        "target_probe_error": "" if ok else f"uncoupled tracks: {', '.join(failed)}",
+        "target_probe_metrics": baseline.get("metrics") if isinstance(baseline.get("metrics"), dict) else {},
+        "track_coupling": coupling,
+    }
+
+
+def _self_test() -> dict[str, Any]:
+    started = time.perf_counter()
+    health = _health()
+    if health["ready"] is not True:
+        return {
+            **health,
+            "ok": False,
+            "ready": False,
+            "gate_status": "target_not_ready",
+            "self_test_ok": False,
+            "self_test_error": str(health.get("target_probe_error", "") or "target is not ready"),
+            "track_coupling": {},
+            "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+        }
+    try:
+        if _target_url():
+            target_result = _fetch(f"{_target_url()}/self-test", timeout_s=20.0)[1]
+        else:
+            target_result = _target_self_test_from_renders()
+        identity_error = product_action_audio_target_identity_error(target_result)
+        if identity_error:
+            raise ValueError(identity_error)
+        coupling = target_result.get("track_coupling") if isinstance(target_result.get("track_coupling"), dict) else {}
+        missing = [track for track in PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS if not isinstance(coupling.get(track), dict)]
+        uncoupled = [
+            track
+            for track, detail in coupling.items()
+            if isinstance(detail, dict) and detail.get("coupled") is not True
+        ]
+        if missing or uncoupled or target_result.get("target_probe_ok") is not True:
+            pieces = []
+            if missing:
+                pieces.append(f"missing tracks: {', '.join(missing)}")
+            if uncoupled:
+                pieces.append(f"uncoupled tracks: {', '.join(uncoupled)}")
+            if target_result.get("target_probe_ok") is not True:
+                pieces.append(str(target_result.get("target_probe_error", "") or "target self-test failed"))
+            raise ValueError("; ".join(pieces))
+        return {
+            **health,
+            "ok": True,
+            "ready": True,
+            "gate_status": "ready",
+            "self_test_ok": True,
+            "self_test_error": "",
+            "track_coupling": coupling,
+            "target_self_test": target_result,
+            "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+        }
+    except (OSError, URLError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+        return {
+            **health,
+            "ok": False,
+            "ready": False,
+            "gate_status": "self_test_failed",
+            "self_test_ok": False,
+            "self_test_error": str(error),
+            "track_coupling": {},
+            "elapsed_ms": (time.perf_counter() - started) * 1000.0,
+        }
+
+
 def _probe() -> dict[str, Any]:
     target_url = _target_url()
     target_command = _target_command()
@@ -300,6 +414,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") in {"", "/ready"}:
             payload = _health()
             _send(self, 200 if payload["ready"] else 503, payload)
+            return
+        if self.path.rstrip("/") == "/self-test":
+            payload = _self_test()
+            _send(self, 200 if payload["ok"] else 503, payload)
             return
         _send(self, 404, {"ok": False, "error": "not_found"})
 

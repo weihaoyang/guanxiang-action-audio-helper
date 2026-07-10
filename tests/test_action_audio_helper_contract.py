@@ -10,7 +10,7 @@ from action_audio_contract import (
 )
 import product_action_audio_helper
 from product_action_audio_helper import _command_probe_payload
-from product_action_audio_target import _render
+from product_action_audio_target import _render, _self_test as _target_self_test
 
 
 def test_target_renders_product_contract_audio() -> None:
@@ -76,6 +76,63 @@ def test_glottal_position_tracks_change_audio() -> None:
 
     mean_abs_delta = sum(abs(float(left) - float(right)) for left, right in zip(baseline_audio, variant_audio)) / len(baseline_audio)
     assert mean_abs_delta > 1.0e-4
+
+
+def test_target_self_test_proves_all_required_tracks_are_coupled() -> None:
+    response = _target_self_test()
+
+    assert response["ok"] is True
+    assert response["target_probe_ok"] is True
+    coupling = response["track_coupling"]
+    assert set(coupling) == set(PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS)
+    for track in PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS:
+        assert coupling[track]["coupled"] is True
+        assert coupling[track]["audio_mean_abs_delta"] > 1.0e-5
+
+
+def test_helper_self_test_rejects_uncoupled_target_track(monkeypatch) -> None:
+    target_identity = _render(_command_probe_payload())["target_identity"]
+
+    def fake_health() -> dict:
+        return {
+            "ok": True,
+            "ready": True,
+            "target_probe_ok": True,
+            "target_probe_error": "",
+            "target_identity": target_identity,
+            "target_probe_metrics": {},
+        }
+
+    def fake_target_url() -> str:
+        return "http://target.example"
+
+    def fake_fetch(url: str, timeout_s: float = 1.5) -> tuple[int, dict]:
+        assert url == "http://target.example/self-test"
+        return 200, {
+            "ok": True,
+            "ready": True,
+            "target_probe_ok": True,
+            "target_probe_error": "",
+            "target_identity": target_identity,
+            "track_coupling": {
+                track: {
+                    "coupled": track != "x_top",
+                    "audio_mean_abs_delta": 0.02 if track != "x_top" else 0.0,
+                    "action_mean_delta": 1.0,
+                }
+                for track in PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS
+            },
+        }
+
+    monkeypatch.setattr(product_action_audio_helper, "_health", fake_health)
+    monkeypatch.setattr(product_action_audio_helper, "_target_url", fake_target_url)
+    monkeypatch.setattr(product_action_audio_helper, "_fetch", fake_fetch)
+
+    response = product_action_audio_helper._self_test()
+
+    assert response["ok"] is False
+    assert response["gate_status"] == "self_test_failed"
+    assert "uncoupled tracks: x_top" in response["self_test_error"]
 
 
 def test_url_target_probe_requires_real_contract_render(monkeypatch) -> None:

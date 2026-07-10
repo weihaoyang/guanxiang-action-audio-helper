@@ -168,6 +168,31 @@ def _validate_render(payload: dict[str, Any], *, duration_ms: int, max_latency_m
     }
 
 
+def _validate_self_test(payload: dict[str, Any]) -> dict[str, Any]:
+    if payload.get("ok") is not True or payload.get("self_test_ok") is not True:
+        raise ValueError(str(payload.get("self_test_error", "") or payload.get("target_probe_error", "") or "helper self-test failed"))
+    target_identity = payload.get("target_identity")
+    if not isinstance(target_identity, dict):
+        raise ValueError("self-test missing target_identity")
+    if target_identity.get("runtime_kind") != PRODUCT_ACTION_AUDIO_TARGET_REQUIRED_RUNTIME_KIND:
+        raise ValueError("self-test target runtime_kind mismatch")
+    coupling = payload.get("track_coupling")
+    if not isinstance(coupling, dict):
+        raise ValueError("self-test missing track_coupling")
+    missing = [track for track in PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS if track not in coupling]
+    uncoupled = [
+        track
+        for track in PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS
+        if isinstance(coupling.get(track), dict) and coupling[track].get("coupled") is not True
+    ]
+    if missing or uncoupled:
+        raise ValueError(f"self-test coupling failure; missing={missing}; uncoupled={uncoupled}")
+    return {
+        "track_count": len(coupling),
+        "elapsed_ms": float(payload.get("elapsed_ms", 0.0) or 0.0),
+    }
+
+
 def _terminate(process: subprocess.Popen[str] | None) -> None:
     if process is not None and process.poll() is None:
         process.terminate()
@@ -220,6 +245,8 @@ def main() -> int:
             stderr=subprocess.PIPE,
         )
         ready = _wait_ready(f"{helper_url}/ready", args.ready_deadline_s)
+        helper_self_test = _fetch_json(f"{helper_url}/self-test", args.timeout_s)[1]
+        self_test = _validate_self_test(helper_self_test)
         render_payload = _build_payload(args.duration_ms, output_file)
         render = _post_json(f"{helper_url}/render", render_payload, args.timeout_s)
         observed = _validate_render(
@@ -238,6 +265,7 @@ def main() -> int:
                         "gate_status": ready.get("gate_status"),
                         "target_probe_ok": ready.get("target_probe_ok"),
                     },
+                    "self_test": self_test,
                     "render": observed,
                     "output_file": str(output_file),
                 },

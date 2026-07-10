@@ -6,7 +6,7 @@ This repository is intentionally separate from the product repository. The produ
 
 ## Runtime Shape
 
-- `product_action_audio_helper.py`: product-facing HTTP adapter with `/health`, `/ready`, and `/render`.
+- `product_action_audio_helper.py`: product-facing HTTP adapter with `/health`, `/ready`, `/self-test`, and `/render`.
 - `product_action_audio_target.py`: replaceable product target implementing the nine-track action-to-audio contract.
 - `action_audio_contract.py`: shared wire contract constants and identity validation.
 - `scripts/run_target_mode_smoke.py`: starts target + helper, renders a 2s dynamic nine-track request, validates WAV/stems/identity/latency, then exits.
@@ -58,6 +58,8 @@ Required action tracks:
 f0, pressure, x_bottom, x_top, chink_area, lag, rel_amp, pulse_shape, flutter
 ```
 
+`/self-test` is the local acceptance endpoint. It renders controlled variants for every required track and fails if any track is missing from the target identity path or does not change the generated audio. Product code should keep using `/render`; QA and integration scripts should use `/self-test` before trusting a helper/target pair.
+
 ## Boundary
 
 This repository does not contain VTL/VocalTractLab assets, GPL runtime code, FEM solvers, or training pipelines. Future high-fidelity targets can replace `product_action_audio_target.py` behind the same HTTP contract.
@@ -69,4 +71,4 @@ python -m pytest
 python scripts/run_target_mode_smoke.py --max-latency-ms 800
 ```
 
-The smoke must report `status=ok`, `runtime_kind=product_action_audio_target`, `claim_tier=product_runtime_contract`, `nine_track_dynamic_glottis`, 48000 Hz, 2 seconds, 96000 samples, non-silent audio, and ready glottal/tract stems.
+The smoke must report `status=ok`, self-test coverage for all 9 tracks, `runtime_kind=product_action_audio_target`, `claim_tier=product_runtime_contract`, `nine_track_dynamic_glottis`, 48000 Hz, 2 seconds, 96000 samples, non-silent audio, and ready glottal/tract stems.
