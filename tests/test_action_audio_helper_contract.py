@@ -5,6 +5,7 @@ from pathlib import Path
 from action_audio_contract import (
     PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_SAMPLE_RATE_HZ,
     PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS,
+    product_action_audio_target_identity_error,
     response_contract_error,
 )
 from product_action_audio_helper import _command_probe_payload
@@ -47,3 +48,14 @@ def test_target_writes_glottal_and_filtered_stems(tmp_path: Path) -> None:
         path = Path(stem["file_path"])
         assert path.exists()
         assert path.stat().st_size > 44
+
+
+def test_target_identity_requires_nine_track_dynamic_glottis_capability() -> None:
+    response = _render(_command_probe_payload())
+    target_identity = dict(response["target_identity"])
+    target_identity["engine_capabilities"] = ["wav_and_stem_export"]
+
+    assert (
+        product_action_audio_target_identity_error({"target_identity": target_identity})
+        == "product action-audio target identity must include nine_track_dynamic_glottis"
+    )

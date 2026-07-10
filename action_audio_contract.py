@@ -12,6 +12,7 @@ PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_CLAIM_TIER = "product_runtime_contract"
 PRODUCT_ACTION_AUDIO_TARGET_PROTOCOL = "guanxiang.action_audio.target.v1"
 PRODUCT_ACTION_AUDIO_TARGET_REQUIRED_RUNTIME_KIND = "product_action_audio_target"
 PRODUCT_ACTION_AUDIO_TARGET_REQUIRED_CLAIM_TIER = "product_runtime_contract"
+PRODUCT_ACTION_AUDIO_TARGET_REQUIRED_CAPABILITY = "nine_track_dynamic_glottis"
 PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS = (
     "f0",
     "pressure",
@@ -91,6 +92,12 @@ def product_action_audio_target_identity_error(payload: Mapping[str, Any]) -> st
     capabilities = target_identity.get("engine_capabilities")
     if not isinstance(capabilities, list) or not any(str(item).strip() for item in capabilities):
         return "product action-audio target identity must include engine_capabilities"
+    normalized_capabilities = {str(item).strip() for item in capabilities}
+    if PRODUCT_ACTION_AUDIO_TARGET_REQUIRED_CAPABILITY not in normalized_capabilities:
+        return (
+            "product action-audio target identity must include "
+            f"{PRODUCT_ACTION_AUDIO_TARGET_REQUIRED_CAPABILITY}"
+        )
     if target_identity.get("product_evidence_allowed") is not True:
         return "product action-audio target identity must explicitly allow product evidence"
     if target_identity.get("not_for_product_evidence") is not False:
