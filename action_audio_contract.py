@@ -28,6 +28,10 @@ PRODUCT_ACTION_AUDIO_HELPER_REQUIRED_TRACKS = (
 _DEVELOPMENT_TOKENS = {"development", "dev", "e2e", "mock", "fixture", "contract_helper"}
 _DEVELOPMENT_SUBSTRINGS = _DEVELOPMENT_TOKENS - {"dev"}
 _REFERENCE_MARKERS = ("vtl", "vocaltractlab", "vocal_tract_lab", "vocal tract lab")
+_INCOMPLETE_TARGET_LIMITATION_MARKERS = (
+    "local_product_target_until_high_fidelity_target_is_promoted",
+    "not_high_fidelity_solver",
+)
 
 
 def _identity_tokens(value: str) -> set[str]:
@@ -104,6 +108,11 @@ def product_action_audio_target_identity_error(payload: Mapping[str, Any]) -> st
         return "product action-audio target identity must not be marked not_for_product_evidence"
     if target_identity.get("fallback_allowed") is not False:
         return "product action-audio target identity must disallow fallback"
+    engine_limitations = target_identity.get("engine_limitations", [])
+    if isinstance(engine_limitations, list):
+        limitations_text = " ".join(str(item).lower() for item in engine_limitations)
+        if any(marker in limitations_text for marker in _INCOMPLETE_TARGET_LIMITATION_MARKERS):
+            return "product action-audio target identity cannot advertise incomplete target limitations"
     identity = " ".join(
         str(target_identity.get(key, "") or "")
         for key in ("id", "target_id", "target_name", "engine_family", "runtime_kind", "claim_tier", "protocol")

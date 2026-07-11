@@ -62,6 +62,17 @@ def test_target_identity_requires_nine_track_dynamic_glottis_capability() -> Non
     )
 
 
+def test_target_identity_rejects_incomplete_target_limitation_marker() -> None:
+    response = _render(_command_probe_payload())
+    target_identity = dict(response["target_identity"])
+    target_identity["engine_limitations"] = ["local_product_target_until_high_fidelity_target_is_promoted"]
+
+    assert (
+        product_action_audio_target_identity_error({"target_identity": target_identity})
+        == "product action-audio target identity cannot advertise incomplete target limitations"
+    )
+
+
 def test_glottal_position_tracks_change_audio() -> None:
     baseline = _command_probe_payload()
     variant = _command_probe_payload()
