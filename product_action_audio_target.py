@@ -8,6 +8,7 @@ import time
 import wave
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 from typing import Any
 
 import numpy as np
@@ -37,11 +38,18 @@ IDENTITY = {
         "time_varying_vocal_tract_filter",
         "wav_and_stem_export",
     ],
-    "engine_limitations": ["local_product_target_until_high_fidelity_target_is_promoted"],
+    "engine_limitations": [
+        "self_owned_runtime_not_patient_specific",
+        "external_high_fidelity_target_may_be_promoted_later",
+    ],
     "product_evidence_allowed": True,
     "not_for_product_evidence": False,
     "fallback_allowed": False,
 }
+
+_SELF_TEST_CACHE_LOCK = Lock()
+_SELF_TEST_CACHE: dict[str, Any] = {"expires_at": 0.0, "payload": None}
+_SELF_TEST_CACHE_TTL_S = 8.0
 
 
 def _send(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
@@ -420,8 +428,52 @@ def _self_test() -> dict[str, Any]:
     }
 
 
+def _cached_self_test() -> dict[str, Any]:
+    now = time.monotonic()
+    with _SELF_TEST_CACHE_LOCK:
+        if (
+            float(_SELF_TEST_CACHE.get("expires_at", 0.0) or 0.0) > now
+            and isinstance(_SELF_TEST_CACHE.get("payload"), dict)
+        ):
+            return dict(_SELF_TEST_CACHE["payload"])
+    payload = _self_test()
+    with _SELF_TEST_CACHE_LOCK:
+        _SELF_TEST_CACHE.update(
+            {
+                "expires_at": time.monotonic() + _SELF_TEST_CACHE_TTL_S,
+                "payload": dict(payload),
+            }
+        )
+    return payload
+
+
 def _health() -> dict[str, Any]:
-    return {"ok": True, "ready": True, "gate_status": "ready", "target_identity": IDENTITY, "target_probe_ok": True, "target_probe_error": "", "target_probe_metrics": {}}
+    self_test = _cached_self_test()
+    ok = bool(self_test.get("ok") is True and self_test.get("target_probe_ok") is True)
+    return {
+        "ok": ok,
+        "ready": ok,
+        "gate_status": "ready" if ok else "self_test_failed",
+        "target_identity": IDENTITY,
+        "target_probe_ok": ok,
+        "target_probe_error": "" if ok else str(self_test.get("target_probe_error", "") or "target self-test failed"),
+        "target_probe_metrics": self_test.get("target_probe_metrics") if isinstance(self_test.get("target_probe_metrics"), dict) else {},
+        "self_test_ok": ok,
+        "track_coupling": self_test.get("track_coupling") if isinstance(self_test.get("track_coupling"), dict) else {},
+        "self_test_elapsed_ms": float(self_test.get("elapsed_ms", 0.0) or 0.0),
+    }
+
+
+def _light_health() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "ready": True,
+        "gate_status": "ready",
+        "target_identity": IDENTITY,
+        "target_probe_ok": True,
+        "target_probe_error": "",
+        "target_probe_metrics": {},
+    }
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -429,8 +481,12 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def do_GET(self) -> None:
-        if self.path.rstrip("/") in {"", "/health", "/ready"}:
-            _send(self, 200, _health())
+        if self.path.rstrip("/") == "/health":
+            _send(self, 200, _light_health())
+            return
+        if self.path.rstrip("/") in {"", "/ready"}:
+            payload = _health()
+            _send(self, 200 if payload["ready"] else 503, payload)
             return
         if self.path.rstrip("/") == "/self-test":
             payload = _self_test()
