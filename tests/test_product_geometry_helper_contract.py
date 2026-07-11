@@ -32,6 +32,11 @@ def test_geometry_2d_returns_product_svg_and_controls() -> None:
     assert "data-role='product-2d-vocal-tract'" in svg
     assert "class='product-airway-lumen'" in svg
     assert response["current_control_points"]
+    assert {point["control_id"] for point in response["current_control_points"]} >= {
+        "jaw_handle",
+        "tongue_tip_handle",
+        "lip_handle",
+    }
     assert response["geometry_provenance"]["fallback_allowed"] is False
 
 

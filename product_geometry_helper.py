@@ -201,6 +201,7 @@ def _control_points(params: list[float], width_px: int, height_px: int) -> list[
     }
     return [
         {
+            "control_id": control_id,
             "id": control_id,
             "label": control_id.replace("_handle", ""),
             "x_px": x,
